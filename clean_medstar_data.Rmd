@@ -1,0 +1,488 @@
+---
+title: "Prepare MedStar Patient Data to be Shared with the Call Center"
+date: "2021-08-02"
+---
+
+# 📝 Instructions
+
+1. Download the latest CSV file from MedStar's FTP server: https://sftp.medstar911.org/login.html   
+
+2. Copy and paste the path to the csv file in the code chunk below.
+
+```{r}
+path <- "/Users/bradcannell/Library/CloudStorage/OneDrive-TheUniversityofTexasHealthScienceCenteratHouston/01 Research/DETECT Not Teams/shared/DETECT Shared with MedStar/DETECT-Answers-by-Patient-v2_2023-01-15_071814.csv"
+```
+
+3. Click run all code chunks below. You should get a summary readout in the console. 
+
+4. Add pre-processed data to FM Pro (https://filemaker.sph.uth.edu/fmi/webd) and to Kiteworks (https://securestor.uth.tmc.edu/w/DjyPDL6UDmSPzo3O)
+
+5. Email Christina Engelken letting her know the data was uploaded to Kiteworks.
+
+
+# ⭐️ Background
+
+In this file we:   
+
+1. Remove duplicate rows (by MedStar ID) from EPCR Data.   
+2. Create a deduplicated version of the patient list to share with M. Davis. This will only have the columns they need to contact the patient.    
+3. Create a deduplicated version of the patient list to add to FM Pro.  
+
+For some reason, the patient data we were initially downloading from [MedStar's FTP Server](https://sftp.medstar911.org/login.html) did not include the initial DETECT screenings. We weren't doing anything with the initial DETECT screenings at first, so it took a little while to figure out that the initial screenings weren't there. 
+
+We requested that the initial DETECT screenings be included in the data going forward. MedStar also uploaded the initial DETECT screenings for all records on the FTP server going back to 2019-07-01. 
+
+On 2020-09-10 Sunil tried to import the initial DETECT screenings into FM Pro, but ran into an error. The error was caused by duplicated MedStar IDs (Incident_Patient_Care_Report_Number). Further, he noticed that the initial DETECT screening responses by row within MedStar ID.
+
+On 2020-10-05 MedStar uploaded an updated data set to the FTP Server. There are still multiple MedStar IDs in some cases, however. After several conversations with MedStar, here is what we figured out about the multiple IDs.
+
+From Desiree:
+
+"Some more feedback on this…
+ 
+I reached out to both crews for these two incidents in September.
+ 
+The crew for the record ending in 51c91 emphasized that they had ran the patient twice. The first worksheet at 0724 was initially created by the paramedic during the preliminary encounter, however, the second worksheet at 0820 was created by his partner as she was the one who ultimately assessed, treated and transferred the patient over to hospital staff so she had the most accurate encounter. She also reported that she put the APS report information in that worksheet.
+ 
+Regarding the record ending in 9c294, I spoke to the crew member who ran the patient. She stated that the worksheet was started at the end of the call and she thinks that the computer timed out which prompted her to do another worksheet. She also emphasized that the APS report information was included in her worksheet and therefore that one should be the most accurate.
+ 
+To Ricky’s point, it appears as though there are a couple of reasons as to why 2 worksheets are created. From what I gather from these two incidents, the second form is the accurate one."
+
+**Update 2020-12-11:**
+* Nitin started adding "worksheet_instance_crew_member" and "worksheet_date_time" to the regular data uploads that MedStar sends to the FTP server. Duplicates by MedStar ID instantly went up from 1 or 2 per month to 562 in December. I don't think this reflects changing conditions on the ground. This is primarily due to differences in worksheet timestamp only. Not differences to substantive values. 
+
+# ⭐️ Decision
+
+After further discussion we decided that it seem like a reasonable assumption to make that the medics typically only create a second worksheet in order to make it more accurate (or complete it). Therefore, whenever there are two worksheets with conflicting information, we should keep the second one. The exception is when only the first row contains an APS report number. In that case, we will keep the row with the APS report number because 1.) We can use later in data quality checks (i.e., to merge with APS data), and 2.) it is the presumably the screening responses that prompted the medic to report to APS.
+
+# 📦 Load packages
+
+```{r message=FALSE}
+library(dplyr, warn.conflicts = FALSE)
+library(readxl, warn.conflicts = FALSE)
+library(readr)
+library(stringr)
+library(readr)
+library(lubridate, warn.conflicts = FALSE)
+```
+
+# 📥 Import data 
+
+This data is downloaded from MedStar's FTP server: https://sftp.medstar911.org/login.html
+
+```{r}
+df_w_dups <- read_csv(path, na = c("", " ", "NULL"))
+```
+
+```{r}
+df_w_dups_dim <- dim(df_w_dups)
+```
+
+# Check for duplicate rows
+
+We need one row per MedStar ID for the study/analysis. When a single MedStar ID has more than one row, we say it has "duplicate" rows. I write that in quotes because the rows may contain different values in one or more columns, and therefore, are not truly duplicates. They are only duplicates in terms of the MedStar ID. We deal with which row to keep below in the `Remove duplicate rows` section. 
+
+Take an initial look to see how many duplicate MedStar ID's there are.
+
+```{r}
+dups <- df_w_dups %>% 
+  count(Incident_Patient_Care_Report_Number) %>% 
+  filter(n > 1) %>% 
+  print()
+```
+
+Store the number of duplicate rows (so that we can do a data check later on and make sure that:   
+1. We dropped all of the duplicate rows.   
+2. We dropped only the duplicate rows.   
+
+```{r}
+# Number of duplicate rows
+dups <- sum(dups$n) - nrow(dups)
+# Number of rows we should have after deduplication
+expect_rows <- nrow(df_w_dups) - dups
+```
+
+# 🚧Data management
+
+Convert character stings to dates and datetimes.
+
+```{r}
+df_w_dups <- df_w_dups %>%
+  mutate(
+    across(
+      .cols = c(Incident_Date_Time, Unit_Arrived_On_Scene_Date_Time, Worksheet_Date_Time),
+      .fns  = as_datetime, format = "%m/%d/%Y %H:%M"
+    ),
+    Patient_Date_Of_Birth = as_date(Patient_Date_Of_Birth, format = "%m/%d/%Y")
+  )
+```
+
+Convert variable names to lowercase
+Also, fill in spaces with underscores
+
+```{r}
+names(df_w_dups) <- str_to_lower(names(df_w_dups))
+names(df_w_dups) <- str_replace_all(names(df_w_dups), " ", "_")
+```
+
+Add within group row number
+
+```{r}
+df_w_dups <- df_w_dups %>%
+  group_by(incident_patient_care_report_number) %>% 
+  arrange(worksheet_date_time) %>% 
+  mutate(
+    row = row_number(),
+    n_rows = max(row)
+  ) %>% 
+  ungroup()
+```
+
+## Remove duplicate rows
+
+After further discussion we decided that it seems like a reasonable assumption to make that the medics typically only create a second worksheet in order to make it more accurate (or complete it). Therefore, whenever there are two worksheets with conflicting information, we should keep the second one. The exception is when only the first row contains an APS report number. In that case, we will keep the row with the APS report number because 1.) We can use later in data quality checks (i.e., to merge with APS data), and 2.) it is the presumably the screening responses that prompted the medic to report to APS.
+
+```{r rows.print=11}
+# # For testing
+# # 1 = no aps report number. Keep second row.
+# # 2 = one aps report number. Keep row with aps report number (row 1).
+# # 3 = Both aps report number. Keep latest row (row 2).
+# # 4 = Mix. Keep last row with aps report number.
+# # 5 = PCR with only one row and no aps report number
+# # 6 = PCR with only one row and an aps report number
+# # 7 = no aps report number and identical worksheet dates, keep first row. 
+# tibble(
+#   incident_patient_care_report_number = c(1, 1, 2, 2, 3, 3, 4, 4, 4, 5, 6, 7, 7),
+#   x = c(1, 0, 0, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1),
+#   aps_report_number = c(NA, NA, 1001, NA, 1002, 1002, NA, 1003, 1003, NA, 1004, NA, NA),
+#   worksheet_date_time = c(1, 2, 1, 2, 1, 2, 2, 1, 3, 1, 1, 4, 4),
+#   row = c(1, 2, 1, 2, 1, 2, 1, 2, 3, 1, 1, 1, 2),
+#   n_rows = c(2, 2, 2, 2, 2, 2, 3, 3, 3, 1, 1, 2, 2),
+#   # Just for testing
+#   should_keep = c(0, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 1, 0)
+# ) %>%
+#   # Identify set of PCR numbers with none, one, and multiple APS report numbers.
+#   # Also identify the latest worksheet date for each PCR set.
+#   group_by(incident_patient_care_report_number) %>%
+#   mutate(
+#     # Count the number of unique worksheet datetimes within each ID
+#     n_worksheet_datetime = length(unique(worksheet_date_time)),
+#     # Tag the row that contains the latest datetime within each ID
+#     max_date = worksheet_date_time == max(worksheet_date_time),
+#     aps_report_rows = case_when(
+#       # Identify PCR numbers with one row and don't consider them further.
+#       # All cases considered below have at least two rows.
+#       n_rows == 1 ~ "ignore",
+#       # Identify sets of PCR numbers with no APS reports
+#       all(is.na(aps_report_number)) ~ "none",
+#       # Identify sets of PCR numbers with multiple rows with an APS report
+#       sum(!is.na(aps_report_number)) > 1 ~ "multiple",
+#       # Finally identify rows with one NA and one APS report number
+#       sum(!is.na(aps_report_number)) == 1 ~ "one"
+#     ),
+#     # Identify the rows to keep
+#     keep_row = case_when(
+#       # If there is only one row, keep it.
+#       n_rows == 1 ~ 1,
+#       # If there's only one row in the set with an APS number, keep that row.
+#       aps_report_rows == "one" & !is.na(aps_report_number) ~ 1,
+#       aps_report_rows == "one" & is.na(aps_report_number) ~ 0,
+#       # If there are multiple rows in the set with an APS number, or if there 
+#       # aren't any rows in the set with an APS number, and if all the worksheet
+#       # datetimes are identical, then keep the first row.
+#       # At this point, we don't have to explicitly deal with the aps_report_rows
+#       # column because all MedStar ID's remaining to be evaluated either have
+#       # "none" or "multiple" rows with an APS number. 
+#       n_worksheet_datetime == 1 & row == 1 ~ 1,
+#       n_worksheet_datetime == 1 & row != 1 ~ 0,
+#       # Otherwise, if there are none/multiple rows in the set with an APS number, 
+#       # then keep the last row by worksheet datetime.
+#       max_date == TRUE ~ 1,
+#       # Else drop row.
+#       TRUE ~ 0
+#     )
+#   ) %>%
+#   # For testing only
+#   # filter(should_keep != keep_row) %>%
+#   # Keep only the desired rows
+#   filter(keep_row == 1) %>%
+#   ungroup()
+```
+
+```{r}
+df <- df_w_dups %>%
+  # Identify set of PCR numbers with none, one, and multiple APS report numbers.
+  # Also identify the latest worksheet date for each PCR set.
+  group_by(incident_patient_care_report_number) %>%
+  mutate(
+    # Count the number of unique worksheet datetimes within each ID
+    n_worksheet_datetime = length(unique(worksheet_date_time)),
+    # Tag the row that contains the latest datetime within each ID
+    max_date = worksheet_date_time == max(worksheet_date_time),
+    aps_report_rows = case_when(
+      # Identify PCR numbers with one row and don't consider them further.
+      # All cases considered below have at least two rows.
+      n_rows == 1 ~ "ignore",
+      # Identify sets of PCR numbers with no APS reports
+      all(is.na(aps_report_number)) ~ "none",
+      # Identify sets of PCR numbers with multiple rows with an APS report
+      sum(!is.na(aps_report_number)) > 1 ~ "multiple",
+      # Finally identify rows with one NA and one APS report number
+      sum(!is.na(aps_report_number)) == 1 ~ "one"
+    ),
+    # Identify the rows to keep
+    keep_row = case_when(
+      # If there is only one row, keep it.
+      n_rows == 1 ~ 1,
+      # If there's only one row in the set with an APS number, keep that row.
+      aps_report_rows == "one" & !is.na(aps_report_number) ~ 1,
+      aps_report_rows == "one" & is.na(aps_report_number) ~ 0,
+      # If there are multiple rows in the set with an APS number, or if there 
+      # aren't any rows in the set with an APS number, and if all the worksheet
+      # datetimes are identical, then keep the first row.
+      # At this point, we don't have to explicitly deal with the aps_report_rows
+      # column because all MedStar ID's remaining to be evaluated either have
+      # "none" or "multiple" rows with an APS number. 
+      n_worksheet_datetime == 1 & row == 1 ~ 1,
+      n_worksheet_datetime == 1 & row != 1 ~ 0,
+      # Otherwise, if there are none/multiple rows in the set with an APS number, 
+      # then keep the last row by worksheet datetime.
+      max_date == TRUE ~ 1,
+      # Else drop row.
+      TRUE ~ 0
+    )
+  ) %>%
+  # Keep only the desired rows
+  filter(keep_row == 1) %>%
+  ungroup()
+```
+
+Chopping up by date (optional). Sometimes I need to filter the data by date.
+
+```{r eval=FALSE}
+# df <- df %>% 
+#   filter(
+#     between(
+#       as.Date(unit_arrived_on_scene_date_time), 
+#       as.Date("2021-09-22"), as.Date("2021-09-30")
+#     )
+#   )
+```
+
+# 🔎 Data check
+
+Make sure we have the expected number of rows after deduplication.
+
+```{r}
+have_rows <- nrow(df)
+```
+
+```{r}
+if (have_rows != expect_rows) {
+  stop(
+    "After row deduplication, we were expecting ", expect_rows, 
+    " rows. Instead, there were ", have_rows, ". Please investigate the discrepency",
+    " further in the `Remove duplicate rows` section of the code."
+  )
+}
+```
+
+# Keep variables of interest (for import into FM Pro)
+
+2021-02-02, From Sunil:
+One minor thing, in the file you sent me to upload. In your coding to process this file, can you drop the last two columns (worksheet_instance_crew_member and worksheet_date_time)?
+
+```{r}
+df <- df %>%
+  select(incident_date_time:aps_report_number) # 37 columns
+```
+
+# Reformat the date
+
+So that it can be imported into FM Pro.
+
+2021-01-07, from Sunil: Main reason the database refused the import is that timestamps have been reformatted to “2019-12-01T00:02:18Z” when it is expecting “12/1/2019  12:02:18 AM”.
+
+```{r}
+# For data checks
+# df %>% 
+#   select(where(is.POSIXct))
+```
+
+```{r}
+df_fm_pro <- df %>% 
+  mutate(
+    across(
+      c(incident_date_time, unit_arrived_on_scene_date_time),
+      ~ format(.x, "%m/%d/%Y %I:%M:%S %p") 
+    ),
+    patient_date_of_birth = format(patient_date_of_birth, "%m/%d/%Y")
+  )
+```
+
+# 🔎 Data check
+
+Make sure we have the expected number of columns in the data frame that will be uploaded to FM Pro.
+
+```{r}
+expect_cols_fm <- 37L
+have_cols_fm <- ncol(df)
+
+if (expect_cols_fm != have_cols_fm) {
+  stop(
+    "We were expecting `df` to have ", expect_cols_fm, " columns. ", 
+    "Instead, there were ", have_cols_fm, " columns. ", 
+    "Please investigate the discrepency further in the ",
+    "`Keep variables of interest (for import into FM Pro)` section of the code."
+  )
+}
+```
+
+# 📤 Export for FM Pro
+
+Upload to FM Pro: https://filemaker.sph.uth.edu/fmi/webd
+
+```{r}
+fm_path <- paste0(
+  "/Users/bradcannell/Desktop/fmpro_medstar_data_", 
+  Sys.Date() %>% format("%Y_%m_%d"), ".csv"
+)
+
+write_csv(df_fm_pro, fm_path, na = "")
+```
+
+# Keep variables of interest (for M. Davis)
+
+```{r}
+df_mdac <- df %>%
+  select(
+    incident_date_time, incident_patient_care_report_number, 
+    patient_first_name:patient_primary_phone_number
+  ) # 14 columns
+```
+
+Check phone numbers
+
+* Remove all 9's and 8179999999    
+* Remove 55555555
+
+```{r}
+df_mdac <- df_mdac %>%
+  # Remove missing
+  filter(!is.na(patient_primary_phone_number)) %>% 
+  # Remove if a single number repeats more than 4 consecutive times 
+  filter(!str_detect(patient_primary_phone_number, "(\\d)\\1{4,}"))
+```
+
+# 🔎 Data check
+
+Make sure we have the expected number of columns in the data frame that will be uploaded to Kiteworks for M. Davis.
+
+```{r}
+expect_cols_mdac <- 14L
+have_cols_mdac <- ncol(df_mdac)
+
+if (expect_cols_mdac != have_cols_mdac) {
+  stop(
+    "We were expecting `df_mdac` to have ", expect_cols_mdac, " columns. ", 
+    "Instead, there were ", have_cols_mdac, " columns. ", 
+    "Please investigate the discrepency further in the ",
+    "`Keep variables of interest (for M. Davis)` section of the code."
+  )
+}
+```
+
+# 📤 Export for MDAC
+
+Upload to Kiteworks: https://securestor.uth.tmc.edu/#/folder/0
+
+```{r}
+mdac_path <- paste0(
+  "/Users/bradcannell/Desktop/detect_patient_list_", 
+  Sys.Date() %>% format("%Y_%m_%d"), ".csv"
+)
+
+write_csv(df_mdac, mdac_path, na = "")
+```
+
+# 🖨 Print summary to console
+
+Get the date from the data to use in the output message below. We may have to change this code if the structure MedStar uses for file names changes.
+
+```{r}
+data_date <- str_extract(path, "(?<=v2_).+(?=_)")
+```
+
+```{r}
+cat(
+  " Imported: \n ", 
+  path, "\n",
+  " Rows:", df_w_dups_dim[1], "\n",
+  " Columns:", df_w_dups_dim[2], "\n",
+  "\n",
+  
+  "Deduplicated: \n",
+  " Dropped rows:", dups, "\n",
+  " Remaining rows:", have_rows, "\n",
+  "\n",
+  
+  "Exported (FM Pro): \n ",
+  fm_path, "\n",
+  " Rows:", nrow(df_fm_pro), "\n",
+  " Columns:", have_cols_fm, "\n",
+  " Upload to: https://filemaker.sph.uth.edu/fmi/webd \n",
+  "\n",
+  
+  "Exported (MDAC): \n ",
+  mdac_path, "\n",
+  " Rows:", nrow(df_mdac), "\n",
+  " Columns:", have_cols_mdac, "\n",
+  " Upload to: /Users/bradcannell/Library/CloudStorage/OneDrive-TheUniversityofTexasHealthScienceCenteratHouston/01_research/DETECT/shared/DETECT Shared with MDAC/DETECT samples",
+  "\n",
+  " Email to Christina Engelken, Kim Dorazio, and Kortney Maedge \n",
+  " Subject:", as.character(Sys.Date()), "DETECT Sample Uploaded to OneDrive \n",
+  " Hi all, \n",
+  "\n",
+  " The", data_date, "DETECT sample is uploaded to OneDrive. Please just let me know if you have any issues. \n", 
+  "\n",
+  " Respectfully, \n",
+  " Brad"
+)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
