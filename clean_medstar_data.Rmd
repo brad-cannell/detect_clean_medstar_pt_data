@@ -10,7 +10,7 @@ date: "2021-08-02"
 2. Copy and paste the path to the csv file in the code chunk below.
 
 ```{r}
-path <- "/Users/bradcannell/Library/CloudStorage/OneDrive-TheUniversityofTexasHealthScienceCenteratHouston/02 Research/04 DETECT/DETECT NIA R01/02 Shared Folders/DETECT Shared with MedStar/DETECT-Answers-by-Patient-v2_2023-04-17_134648.csv"
+path <- "/Users/bradcannell/Library/CloudStorage/OneDrive-UTHealthHouston/02 Research/04 DETECT/DETECT NIA R01/02 Shared Folders/DETECT Shared with MedStar/DETECT-Answers-by-Patient-v2_2023-05-03_121204.csv"
 ```
 
 3. Click run all code chunks below. You should get a summary readout in the console. 
