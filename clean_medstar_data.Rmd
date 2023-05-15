@@ -10,7 +10,7 @@ date: "2021-08-02"
 2. Copy and paste the path to the csv file in the code chunk below.
 
 ```{r}
-path <- "/Users/bradcannell/Library/CloudStorage/OneDrive-UTHealthHouston/02 Research/04 DETECT/DETECT NIA R01/02 Shared Folders/DETECT Shared with MedStar/DETECT-Answers-by-Patient-v2_2023-05-03_121204.csv"
+path <- "/Users/bradcannell/Library/CloudStorage/OneDrive-TheUniversityofTexasHealthScienceCenteratHouston/02 Research/04 DETECT/DETECT NIA R01/02 Shared Folders/DETECT Shared with MedStar/DETECT-Answers-by-Patient-v2_2023-05-15_075600.csv"
 ```
 
 3. Click run all code chunks below. You should get a summary readout in the console. 
@@ -91,7 +91,7 @@ dups <- df_w_dups %>%
   print()
 ```
 
-Store the number of duplicate rows (so that we can do a data check later on and make sure that:   
+Store the number of duplicate rows so that we can do a data check later on and make sure that:   
 1. We dropped all of the duplicate rows.   
 2. We dropped only the duplicate rows.   
 
@@ -137,6 +137,14 @@ df_w_dups <- df_w_dups %>%
   ) %>% 
   ungroup()
 ```
+
+```{r}
+# For data checking
+df_w_dups %>% 
+  group_by(incident_patient_care_report_number) %>% 
+  filter(max(n_rows) > 1)
+```
+
 
 ## Remove duplicate rows
 
@@ -247,7 +255,7 @@ df <- df_w_dups %>%
       n_worksheet_datetime == 1 & row != 1 ~ 0,
       # Otherwise, if there are none/multiple rows in the set with an APS number, 
       # then keep the last row by worksheet datetime.
-      max_date == TRUE ~ 1,
+      max_date == TRUE & row == n_rows ~ 1,
       # Else drop row.
       TRUE ~ 0
     )
@@ -255,6 +263,13 @@ df <- df_w_dups %>%
   # Keep only the desired rows
   filter(keep_row == 1) %>%
   ungroup()
+```
+
+```{r}
+# For data checking
+df %>% 
+  group_by(incident_patient_care_report_number) %>% 
+  filter(max(n_rows) > 1)
 ```
 
 Chopping up by date (optional). Sometimes I need to filter the data by date.
